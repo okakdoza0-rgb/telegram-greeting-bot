@@ -1,5 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
+const express = require('express');
+const https = require('https');
 
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
@@ -15,19 +17,18 @@ try {
 
 const waitingGreeting = {};
 
+// команда создать приветствие
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
 
   if (!msg.text) return;
 
-  // команда создать приветствие
   if (msg.text.toLowerCase() === 'create greeting') {
     waitingGreeting[chatId] = true;
-    bot.sendMessage(chatId, "Напишите приветствие для новых участников.\n\nМожно использовать {name} для имени пользователя.");
+    bot.sendMessage(chatId, "Напишите приветствие для новых участников.\nМожно использовать {name}");
     return;
   }
 
-  // сохранение приветствия
   if (waitingGreeting[chatId]) {
     greetings[chatId] = msg.text;
 
@@ -60,3 +61,31 @@ bot.on('new_chat_members', (msg) => {
     bot.sendMessage(chatId, text);
   });
 });
+
+/* ---------------------------
+   SERVER ДЛЯ RENDER
+--------------------------- */
+
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("Bot is running");
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("Server started");
+});
+
+/* ---------------------------
+   СКРИПТ ЧТОБЫ БОТ НЕ СПАЛ
+--------------------------- */
+
+const url = process.env.RENDER_EXTERNAL_URL;
+
+setInterval(() => {
+  if (url) {
+    https.get(url);
+  }
+}, 300000); // каждые 5 минут
