@@ -17,7 +17,8 @@ const app = express();
 let greetings = {};
 let waitingAction = {};
 
-// загрузка приветствий
+// ---------- utils ----------
+
 function loadGreetings() {
   try {
     if (fs.existsSync(GREETINGS_FILE)) {
@@ -33,7 +34,6 @@ function loadGreetings() {
   }
 }
 
-// сохранение приветствий
 function saveGreetings() {
   try {
     fs.writeFileSync(GREETINGS_FILE, JSON.stringify(greetings, null, 2));
@@ -42,7 +42,6 @@ function saveGreetings() {
   }
 }
 
-// проверка прав
 async function canManageBot(chatId, userId) {
   if (userId === OWNER_ID) return true;
 
@@ -55,70 +54,134 @@ async function canManageBot(chatId, userId) {
   }
 }
 
+function getGreeting(chatId) {
+  return greetings[String(chatId)];
+}
+
+function setGreeting(chatId, text) {
+  greetings[String(chatId)] = text;
+  saveGreetings();
+}
+
+function deleteGreeting(chatId) {
+  delete greetings[String(chatId)];
+  saveGreetings();
+}
+
 loadGreetings();
 
+// ---------- commands ----------
+
 bot.onText(/\/start/, async (msg) => {
-  await bot.sendMessage(
-    msg.chat.id,
-    `Бот работает.
+  try {
+    await bot.sendMessage(
+      msg.chat.id,
+      `Бот работает.
 
 Команды:
-create greeting - создать приветствие
-edit greeting - изменить приветствие
-show greeting - показать приветствие
-delete greeting - удалить приветствие`
-  );
+create greeting
+create greeting <текст>
+
+edit greeting
+edit greeting <новый текст>
+
+show greeting
+delete greeting
+
+Пример:
+create greeting Привет {name}! Перед общением прочитайте правила.`
+    );
+  } catch (error) {
+    console.error('Ошибка /start:', error.message);
+  }
 });
 
 bot.on('message', async (msg) => {
   try {
     const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
+    const userId = msg.from?.id;
+    const text = msg.text?.trim();
 
     if (!text) return;
-    if (msg.new_chat_members || msg.left_chat_member) return;
-    if (msg.chat.type === 'private') return;
 
-    const lowerText = text.toLowerCase();
+    // не реагируем на системные сообщения
+    if (msg.new_chat_members || msg.left_chat_member) return;
+
+    // бот только для групп
+    if (msg.chat.type === 'private') return;
 
     const allowed = await canManageBot(chatId, userId);
 
+    // если ждём текст после create/edit
+    const pending = waitingAction[String(chatId)];
+    if (pending && pending.userId === userId) {
+      const newGreeting = text;
+
+      if (!newGreeting) {
+        await bot.sendMessage(chatId, '❌ Текст пустой.');
+        return;
+      }
+
+      setGreeting(chatId, newGreeting);
+      delete waitingAction[String(chatId)];
+
+      if (pending.action === 'create') {
+        await bot.sendMessage(chatId, '✅ Приветствие создано.');
+      } else {
+        await bot.sendMessage(chatId, '✅ Приветствие изменено.');
+      }
+      return;
+    }
+
+    const lower = text.toLowerCase();
+
     // CREATE GREETING
-    if (lowerText === 'create greeting') {
+    if (lower === 'create greeting' || lower.startsWith('create greeting ')) {
       if (!allowed) {
         await bot.sendMessage(chatId, '❌ Только админы могут управлять ботом.');
         return;
       }
 
-      if (greetings[String(chatId)]) {
+      const existing = getGreeting(chatId);
+
+      // если уже есть приветствие
+      if (existing) {
         await bot.sendMessage(
           chatId,
-          '❌ Приветствие уже существует. Используй команду: edit greeting'
+          '❌ Приветствие уже существует. Используй: edit greeting'
         );
         return;
       }
 
-      waitingAction[chatId] = {
+      const instantText = text.slice('create greeting'.length).trim();
+
+      // если текст написан сразу в этой же строке
+      if (instantText) {
+        setGreeting(chatId, instantText);
+        await bot.sendMessage(chatId, '✅ Приветствие создано.');
+        return;
+      }
+
+      // если текста нет — ждём следующим сообщением
+      waitingAction[String(chatId)] = {
         userId,
         action: 'create'
       };
 
-      await bot.sendMessage(
-        chatId,
-        'Напиши текст нового приветствия.'
-      );
+      await bot.sendMessage(chatId, 'Напиши текст нового приветствия.');
       return;
     }
 
     // EDIT GREETING
-    if (lowerText === 'edit greeting') {
+    if (lower === 'edit greeting' || lower.startsWith('edit greeting ')) {
       if (!allowed) {
         await bot.sendMessage(chatId, '❌ Только админы могут управлять ботом.');
         return;
       }
 
-      if (!greetings[String(chatId)]) {
+      const existing = getGreeting(chatId);
+
+      if (!existing) {
         await bot.sendMessage(
           chatId,
           '❌ Приветствия ещё нет. Сначала используй: create greeting'
@@ -126,69 +189,61 @@ bot.on('message', async (msg) => {
         return;
       }
 
-      waitingAction[chatId] = {
+      const instantText = text.slice('edit greeting'.length).trim();
+
+      // если новый текст написан сразу
+      if (instantText) {
+        setGreeting(chatId, instantText);
+        await bot.sendMessage(chatId, '✅ Приветствие изменено.');
+        return;
+      }
+
+      // если текста нет — ждём следующим сообщением
+      waitingAction[String(chatId)] = {
         userId,
         action: 'edit'
       };
 
-      await bot.sendMessage(
-        chatId,
-        'Напиши новый текст приветствия.'
-      );
+      await bot.sendMessage(chatId, 'Напиши новый текст приветствия.');
       return;
     }
 
     // SHOW GREETING
-    if (lowerText === 'show greeting') {
+    if (lower === 'show greeting') {
       if (!allowed) {
         await bot.sendMessage(chatId, '❌ Только админы могут управлять ботом.');
         return;
       }
 
-      const greeting = greetings[String(chatId)];
+      const greeting = getGreeting(chatId);
 
       if (!greeting) {
-        await bot.sendMessage(chatId, 'Приветствие ещё не установлено.');
+        await bot.sendMessage(chatId, '❌ Приветствие ещё не создано.');
         return;
       }
 
-      await bot.sendMessage(chatId, `Текущее приветствие:\n\n${greeting}`);
+      await bot.sendMessage(chatId, `📌 Текущее приветствие:\n\n${greeting}`);
       return;
     }
 
     // DELETE GREETING
-    if (lowerText === 'delete greeting') {
+    if (lower === 'delete greeting') {
       if (!allowed) {
         await bot.sendMessage(chatId, '❌ Только админы могут управлять ботом.');
         return;
       }
 
-      if (!greetings[String(chatId)]) {
-        await bot.sendMessage(chatId, 'Приветствие уже удалено или не создано.');
+      const greeting = getGreeting(chatId);
+
+      if (!greeting) {
+        await bot.sendMessage(chatId, '❌ Приветствие уже удалено или не создано.');
         return;
       }
 
-      delete greetings[String(chatId)];
-      saveGreetings();
+      deleteGreeting(chatId);
+      delete waitingAction[String(chatId)];
 
       await bot.sendMessage(chatId, '✅ Приветствие удалено.');
-      return;
-    }
-
-    // СОХРАНЕНИЕ ТЕКСТА ПОСЛЕ create/edit
-    const pending = waitingAction[chatId];
-
-    if (pending && pending.userId === userId) {
-      greetings[String(chatId)] = text;
-      saveGreetings();
-
-      const actionText = pending.action === 'create'
-        ? '✅ Приветствие создано.'
-        : '✅ Приветствие изменено.';
-
-      delete waitingAction[chatId];
-
-      await bot.sendMessage(chatId, actionText);
       return;
     }
   } catch (error) {
@@ -196,11 +251,12 @@ bot.on('message', async (msg) => {
   }
 });
 
-// приветствие новых участников
+// ---------- greet new members ----------
+
 bot.on('new_chat_members', async (msg) => {
   try {
     const chatId = msg.chat.id;
-    const greetingText = greetings[String(chatId)];
+    const greetingText = getGreeting(chatId);
 
     if (!greetingText) return;
 
@@ -217,7 +273,8 @@ bot.on('new_chat_members', async (msg) => {
   }
 });
 
-// сервер для Render
+// ---------- render server ----------
+
 app.get('/', (req, res) => {
   res.status(200).send('Bot is running');
 });
