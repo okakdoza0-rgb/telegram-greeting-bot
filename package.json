@@ -1,11 +1,13 @@
 {
   "name": "telegram-greeting-bot",
   "version": "1.0.0",
+  "description": "Telegram bot for greeting new members",
   "main": "bot.js",
   "scripts": {
     "start": "node bot.js"
   },
   "dependencies": {
+    "express": "^4.21.2",
     "node-telegram-bot-api": "^0.66.0"
   }
 }
