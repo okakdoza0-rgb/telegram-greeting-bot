@@ -19,7 +19,7 @@ bot.on('message', (msg) => {
 
   if (msg.text === 'create greeting') {
     waitingGreeting[chatId] = true;
-    bot.sendMessage(chatId, "What greeting message do you want to set?");
+    bot.sendMessage(chatId, "Какое приветствие вы хотите установить?");
     return;
   }
 
@@ -28,7 +28,7 @@ bot.on('message', (msg) => {
     fs.writeFileSync('greetings.json', JSON.stringify(greetings));
     waitingGreeting[chatId] = false;
 
-    bot.sendMessage(chatId, "Greeting saved.");
+    bot.sendMessage(chatId, "Приветствие сохранено.");
   }
 });
 
