@@ -3,27 +3,20 @@ const fs = require('fs');
 const express = require('express');
 
 const token = process.env.BOT_TOKEN;
+const OWNER_ID = 7837011810;
+const GREETINGS_FILE = 'greetings.json';
 
 if (!token) {
-  console.error('ERROR: BOT_TOKEN not found in environment variables');
+  console.error('ERROR: BOT_TOKEN not found');
   process.exit(1);
 }
 
-const bot = new TelegramBot(token, {
-  polling: true,
-});
-
+const bot = new TelegramBot(token, { polling: true });
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// файл для сохранения приветствий
-const GREETINGS_FILE = 'greetings.json';
-
-// хранилище приветствий
 let greetings = {};
-const waitingGreeting = {};
 
-// загрузка приветствий из файла
+// загрузка приветствий
 function loadGreetings() {
   try {
     if (fs.existsSync(GREETINGS_FILE)) {
@@ -39,7 +32,7 @@ function loadGreetings() {
   }
 }
 
-// сохранение приветствий в файл
+// сохранение приветствий
 function saveGreetings() {
   try {
     fs.writeFileSync(GREETINGS_FILE, JSON.stringify(greetings, null, 2));
@@ -48,8 +41,11 @@ function saveGreetings() {
   }
 }
 
-// проверка, админ ли пользователь
-async function isUserAdmin(chatId, userId) {
+// проверка прав
+async function canManageBot(chatId, userId) {
+  // ты можешь всегда
+  if (userId === OWNER_ID) return true;
+
   try {
     const admins = await bot.getChatAdministrators(chatId);
     return admins.some((admin) => admin.user.id === userId);
@@ -61,17 +57,6 @@ async function isUserAdmin(chatId, userId) {
 
 loadGreetings();
 
-// команда /start
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
-
-  await bot.sendMessage(
-    chatId,
-    'Бот работает.\n\nКоманда для установки приветствия:\ncreate greeting\n\nПотом просто отправь текст приветствия.\nМожно использовать {name}.'
-  );
-});
-
-// обработка всех сообщений
 bot.on('message', async (msg) => {
   try {
     const chatId = msg.chat.id;
@@ -79,42 +64,57 @@ bot.on('message', async (msg) => {
     const text = msg.text;
 
     if (!text) return;
+    if (msg.chat.type === 'private') return;
 
-    // чтобы не реагировал на системные сообщения
-    if (msg.new_chat_members || msg.left_chat_member) return;
-
-    // создать приветствие
+    // create greeting
     if (text.toLowerCase() === 'create greeting') {
-      // только для групп
-      if (msg.chat.type === 'private') {
-        await bot.sendMessage(chatId, 'Эта команда работает только в группе.');
+      const allowed = await canManageBot(chatId, userId);
+
+      if (!allowed) {
+        await bot.sendMessage(chatId, '❌ Только админы могут управлять ботом.');
         return;
       }
 
-      const admin = await isUserAdmin(chatId, userId);
+      greetings[String(chatId)] = 'Перед общением, обязательно прочитайте правила.';
+      saveGreetings();
 
-      if (!admin) {
-        await bot.sendMessage(chatId, 'Только админ может создавать приветствие.');
-        return;
-      }
-
-      waitingGreeting[chatId] = userId;
-
-      await bot.sendMessage(
-        chatId,
-        'Напишите приветствие для новых участников.\n\nМожно использовать {name}.\n\nПример:\nПривет {name}! Добро пожаловать в группу.'
-      );
+      await bot.sendMessage(chatId, '✅ Приветствие установлено.');
       return;
     }
 
-    // сохранение приветствия
-    if (waitingGreeting[chatId] && waitingGreeting[chatId] === userId) {
-      greetings[String(chatId)] = text;
+    // delete greeting
+    if (text.toLowerCase() === 'delete greeting') {
+      const allowed = await canManageBot(chatId, userId);
+
+      if (!allowed) {
+        await bot.sendMessage(chatId, '❌ Только админы могут управлять ботом.');
+        return;
+      }
+
+      delete greetings[String(chatId)];
       saveGreetings();
 
-      delete waitingGreeting[chatId];
+      await bot.sendMessage(chatId, '✅ Приветствие удалено.');
+      return;
+    }
 
-      await bot.sendMessage(chatId, '✅ Приветствие сохранено.');
+    // show greeting
+    if (text.toLowerCase() === 'show greeting') {
+      const allowed = await canManageBot(chatId, userId);
+
+      if (!allowed) {
+        await bot.sendMessage(chatId, '❌ Только админы могут управлять ботом.');
+        return;
+      }
+
+      const greeting = greetings[String(chatId)];
+
+      if (!greeting) {
+        await bot.sendMessage(chatId, 'Приветствие ещё не установлено.');
+        return;
+      }
+
+      await bot.sendMessage(chatId, `Текущее приветствие:\n\n${greeting}`);
       return;
     }
   } catch (error) {
@@ -131,41 +131,30 @@ bot.on('new_chat_members', async (msg) => {
     if (!greetingText) return;
 
     for (const user of msg.new_chat_members) {
-      // чтобы бот сам себя не приветствовал
       if (user.is_bot) continue;
 
-      const name =
-        user.first_name ||
-        user.username ||
-        'друг';
-
-      const finalText = greetingText.replace(/\{name\}/g, name);
-
-      await bot.sendMessage(chatId, finalText);
+      await bot.sendMessage(chatId, greetingText);
     }
   } catch (error) {
-    console.error('Ошибка приветствия нового участника:', error.message);
+    console.error('Ошибка приветствия:', error.message);
   }
 });
 
-// главная страница для Render / UptimeRobot
+// сервер для Render
 app.get('/', (req, res) => {
   res.status(200).send('Bot is running');
 });
 
-// health route
 app.get('/health', (req, res) => {
   res.status(200).json({ ok: true });
 });
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server started on port ${PORT}`);
+  console.log('BOT STARTED');
 });
 
 bot.on('polling_error', (error) => {
   console.error('Polling error:', error.message);
-});
-
-bot.on('webhook_error', (error) => {
-  console.error('Webhook error:', error.message);
 });
